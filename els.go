@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"time"
+	"reflect"
 
 	log "github.com/Sirupsen/logrus"
 	"github.com/mitchellh/mapstructure"
@@ -56,19 +57,19 @@ type SpectrumQuery struct {
 
 const layout = "2006-01-02T15:04:05"
 
-func indexELSData(xmlMap []map[string]interface{}, host string, index string, dataType string, bulkSize int, tz string) error {
+func indexELSData(
+	xmlMap []map[string]interface{},
+	host string,
+	index string,
+	dataType string,
+	bulkSize int,
+	tz string,
+	pepFileName string,
+	client *elastic.Client) error {
 	loc, _ := time.LoadLocation(tz)
 	request := gorequest.New()
 	// Create a context
 	ctx := context.Background()
-	// Create a client
-	client, err := elastic.NewClient(
-		elastic.SetURL(host),
-		elastic.SetSniff(false))
-	if err != nil {
-		log.Error("Failed in creating elasticserch client ", err)
-		return err
-	}
 	bulkService := elastic.NewBulkService(client)
 
 	// Check is the index exist, then we have template already. Otherwise insert template
@@ -84,41 +85,60 @@ func indexELSData(xmlMap []map[string]interface{}, host string, index string, da
 		}
 	}
 
-	log.Info("Indexing data to elasticserch: " + host + " index: " + index)
+	log.Info("Indexing " + pepFileName + " to elasticserch: " + host + " index: " + index)
 
+    
 	for _, specData := range xmlMap {
 		var specQuery SpectrumQuery
 		var searchHits []SearchHit
+		var searchHitsOne SearchHit
+            err := mapstructure.Decode(specData, &specQuery)
+            //fmt.Printf("%s\n", specData)
+            if err != nil {
+                log.Warn("Failed in parsing SpectrumQuery ", err)
+                log.Warn("Query-ERROR %+v ", specData)
+                continue
+            }
+            specQueryDataType := reflect.TypeOf(specQuery.Search_result["search_hit"])
+            switch specQueryDataType.Kind() {
+            case reflect.Slice:
+                fmt.Println(specQuery.Search_result["search_hit"], "\n tXslice", specQueryDataType.Elem())
+                err = mapstructure.Decode(specQuery.Search_result["search_hit"], &searchHits)
+            case reflect.Map:
+                //slice1 := make(map[int]interface{},1)
+                //searchHits:=specQuery.Search_result["search_hit"]
+                fmt.Println(specQuery.Search_result["search_hit"], "\n tXmap", specQueryDataType.Elem())
+                err = mapstructure.Decode(specQuery.Search_result["search_hit"], &searchHitsOne)
+            case reflect.Array:
+                fmt.Println(specQuery.Search_result["search_hit"], "\n tXarray", specQueryDataType.Elem())
+            default:
+                fmt.Println(specQuery.Search_result["search_hit"], "\n tXelse", specQueryDataType.Elem())
+            }
+                if err != nil {
+                    log.Warn(" Failed in parsing Search Result for Index ", specQuery.Index,"Mass", specQuery.Precursor_neutral_mass,"Err ",err)
+                    log.Warn("HIT-ERROR %T ", specQuery.Search_result["search_hit"])
+                    continue
+                }
 
-		err := mapstructure.Decode(specData, &specQuery)
-		if err != nil {
-			log.Warn("Failed in parsing SpectrumQuery ", err)
-			continue
-		}
-		err = mapstructure.Decode(specQuery.Search_result["search_hit"], &searchHits)
-		if err != nil {
-			log.Warn("Failed in parsing Search Result for Index ", specQuery.Index, err)
-			continue
-		}
-
-		// Convert string date to time and add rank part as seconds to given time
-		specQuery.DateTime, err = time.ParseInLocation(layout, specQuery.Date, loc)
-		secInt, _ := strconv.Atoi(specQuery.Index)
-		sec := time.Duration(secInt) * time.Second
-		specQuery.DateTime = specQuery.DateTime.Add(sec)
-		if err != nil {
-			log.Warn("Failed in parsing time ", err)
-			continue
-		}
-
+                // Convert string date to time and add rank part as seconds to given time
+                specQuery.DateTime, err = time.ParseInLocation(layout, specQuery.Date, loc)
+                secInt, _ := strconv.Atoi(specQuery.Index)
+                sec := time.Duration(secInt) * time.Second
+                specQuery.DateTime = specQuery.DateTime.Add(sec)
+                if err != nil {
+                    log.Warn("Failed in parsing time ", err)
+                    continue
+                }
+  
 		// Add current spectrum query data to elasticserch data in bulk format
-		id := fmt.Sprintf("%x", sha1.Sum([]byte(specQuery.Spectrum)))
+		id := fmt.Sprintf("%x", sha1.Sum([]byte(specQuery.Spectrum+pepFileName)))
 		// Add 000 to make time in milliseconds
 		jsonData := "{\"@timestamp\":\"" + strconv.FormatInt(specQuery.DateTime.Unix(), 10) + "000" +
 			"\", \"database\": \"" + specQuery.DbName +
 			"\", \"search_engine\": \"" + specQuery.SearchEng +
 			"\", \"file\": \"" + specQuery.File +
 			"\", \"filetype\": \"" + specQuery.FileType +
+			"\", \"pep_file_name\": \"" + pepFileName +
 			"\", \"spectrum\": \"" + specQuery.Spectrum +
 			"\", \"spectrumNativeID\": \"" + specQuery.SpectrumNativeID +
 			"\", \"start_scan\": \"" + specQuery.Start_scan +
@@ -127,9 +147,49 @@ func indexELSData(xmlMap []map[string]interface{}, host string, index string, da
 			"\", \"assumed_charge\": \"" + specQuery.Assumed_charge +
 			"\", \"index\": \"" + specQuery.Index +
 			"\", \"retention_time_sec\": \"" + specQuery.Retention_time_sec + "\""
-
-		// We have multiple hits, so add them as array with a counter
+            //fmt.Printf("%s\n",specQuery.Search_result["search_hit"])
 		cnt := 0
+		// single hit case
+        if (len(searchHitsOne.Peptide)>0) {
+                cnt = cnt + 1
+                cntS := strconv.Itoa(cnt)
+                jsonData = jsonData + ", \"peptide_hit_" + cntS + "\": \"" + searchHitsOne.Peptide +
+                    "\", \"peptide_prev_aa_hit_" + cntS + "\": \"" + searchHitsOne.Peptide_prev_aa +
+                    "\", \"peptide_next_aa_hit_" + cntS + "\": \"" + searchHitsOne.Peptide_next_aa +
+                    "\", \"protein_hit_" + cntS + "\": \"" + searchHitsOne.Protein +
+                    "\", \"num_tot_proteins_hit_" + cntS + "\": \"" + searchHitsOne.Num_tot_proteins +
+                    "\", \"num_matched_ions_hit_" + cntS + "\": \"" + searchHitsOne.Num_matched_ions +
+                    "\", \"tot_num_ions_hit_" + cntS + "\": \"" + searchHitsOne.Tot_num_ions +
+                    "\", \"calc_neutral_pep_mass_hit_" + cntS + "\": \"" + searchHitsOne.Calc_neutral_pep_mass +
+                    "\", \"massdiff_hit_" + cntS + "\": \"" + searchHitsOne.Massdiff +
+                    "\", \"num_tol_term_hit_" + cntS + "\": \"" + searchHitsOne.Num_tol_term +
+                    "\", \"num_missed_cleavages_hit_" + cntS + "\": \"" + searchHitsOne.Num_missed_cleavages +
+                    "\", \"num_matched_peptides_hit_" + cntS + "\": \"" + searchHitsOne.Num_matched_peptides + "\""
+                var searchScores []SearchScore
+                err := mapstructure.Decode(searchHitsOne.Search_score, &searchScores)
+                if err != nil {
+                    log.Error("Failed in parsing Search Scores ", err)
+                    continue
+                }
+                // lets flatten the scores, as we don't want nested arrays
+                for _, score := range searchScores {
+                    switch score.Name {
+                    case "xcorr":
+                        jsonData = jsonData + ", \"xcorr_hit_" + cntS + "\":\"" + score.Value + "\""
+                    case "deltacn":
+                        jsonData = jsonData + ", \"deltacn_hit_" + cntS + "\":\"" + score.Value + "\""
+                    case "deltacnstar":
+                        jsonData = jsonData + ", \"deltacnstar_hit_" + cntS + "\":\"" + score.Value + "\""
+                    case "spscore":
+                        jsonData = jsonData + ", \"spscore_hit_" + cntS + "\":\"" + score.Value + "\""
+                    case "sprank":
+                        jsonData = jsonData + ", \"sprank_hit_" + cntS + "\":\"" + score.Value + "\""
+                    case "expect":
+                        jsonData = jsonData + ", \"expect_hit_" + cntS + "\":\"" + score.Value + "\""
+                    }
+                }
+        }
+		// We have multiple hits, so add them as array with a counter
 		for _, hit := range searchHits {
 			cnt = cnt + 1
 			cntS := strconv.Itoa(cnt)
@@ -145,7 +205,6 @@ func indexELSData(xmlMap []map[string]interface{}, host string, index string, da
 				"\", \"num_tol_term_hit_" + cntS + "\": \"" + hit.Num_tol_term +
 				"\", \"num_missed_cleavages_hit_" + cntS + "\": \"" + hit.Num_missed_cleavages +
 				"\", \"num_matched_peptides_hit_" + cntS + "\": \"" + hit.Num_matched_peptides + "\""
-
 			var searchScores []SearchScore
 			err := mapstructure.Decode(hit.Search_score, &searchScores)
 			if err != nil {
@@ -172,18 +231,41 @@ func indexELSData(xmlMap []map[string]interface{}, host string, index string, da
 		}
 
 		jsonData = jsonData + "}"
+        fmt.Printf("%s\n", jsonData)
 		bulkService.Add(elastic.NewBulkIndexRequest().Index(index).Type(dataType).Id(id).Doc(jsonData))
 		if bulkService.NumberOfActions() >= bulkSize {
-			_, err = bulkService.Do(ctx)
+			_, err := bulkService.Do(ctx)
 			if err != nil {
 				log.Error("Failed in doing bulk request ", err)
 			}
 		}
 	}
 	// ingest the rest of the data
-	_, err = bulkService.Do(ctx)
+	_, err := bulkService.Do(ctx)
 	if err != nil {
 		log.Error("Failed in doing bulk request ", err)
 	}
 	return nil
+}
+
+func isFileIndexed(fName string, client *elastic.Client, index string) bool {
+	fQuery := elastic.NewMatchPhraseQuery("pep_file_name", fName)
+	log.Debug("Checking file ", fName)
+	searchResult, err := client.Search().
+		Index(index).
+		Query(fQuery).
+		Size(10).
+		Do(context.Background())
+
+	if err != nil {
+		log.Error("Failed in checking whether file is indexed ", err)
+		return false
+	}
+
+	log.Debug("Got search result for ", fName, " with hits ", searchResult.Hits.TotalHits)
+	if searchResult.Hits.TotalHits > 0 {
+		return true
+	}
+
+	return false
 }
