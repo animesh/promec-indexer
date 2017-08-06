@@ -15,6 +15,13 @@ import (
 	"gopkg.in/olivere/elastic.v5"
 )
 
+type ModificationInfo struct  {
+	//Mods_result          map[string]interface{} `json:"mod_aminoacid_mass"`
+	Peptide  string `json:"modified_peptide"`
+	P_mass string `json:"value1"`
+	P_substitution string `json:"value2"`
+}
+
 type SearchScore struct {
 	Name  string `json:"name"`
 	Value string `json:"value"`
@@ -35,6 +42,7 @@ type SearchHit struct {
 	Num_missed_cleavages  string        `json:"num_missed_cleavages"`
 	Num_matched_peptides  string        `json:"num_matched_peptides"`
 	Search_score          []interface{} `json:"search_score"`
+	Modification_info     map[string]interface{} `json:"modification_info"`
 }
 
 type SpectrumQuery struct {
@@ -92,6 +100,7 @@ func indexELSData(
 		var specQuery SpectrumQuery
 		var searchHits []SearchHit
 		var searchHitsOne SearchHit
+        var modificationInfo ModificationInfo
             err := mapstructure.Decode(specData, &specQuery)
             //fmt.Printf("%s\n", specData)
             if err != nil {
@@ -102,12 +111,12 @@ func indexELSData(
             specQueryDataType := reflect.TypeOf(specQuery.Search_result["search_hit"])
             switch specQueryDataType.Kind() {
             case reflect.Slice:
-                fmt.Println(specQuery.Search_result["search_hit"], "\n tXslice", specQueryDataType.Elem())
+                fmt.Println(specQuery.Search_result["search_hit"], "\n tXXslice", specQueryDataType.Elem())
                 err = mapstructure.Decode(specQuery.Search_result["search_hit"], &searchHits)
             case reflect.Map:
                 //slice1 := make(map[int]interface{},1)
                 //searchHits:=specQuery.Search_result["search_hit"]
-                fmt.Println(specQuery.Search_result["search_hit"], "\n tXmap", specQueryDataType.Elem())
+                fmt.Println(specQuery.Search_result["search_hit"], "\n tXXmap", specQueryDataType.Elem())
                 err = mapstructure.Decode(specQuery.Search_result["search_hit"], &searchHitsOne)
             case reflect.Array:
                 fmt.Println(specQuery.Search_result["search_hit"], "\n tXarray", specQueryDataType.Elem())
@@ -150,6 +159,14 @@ func indexELSData(
             //fmt.Printf("%s\n",specQuery.Search_result["search_hit"])
 		cnt := 0
 		// single hit case
+                    err = mapstructure.Decode(searchHitsOne.Modification_info, &modificationInfo)
+                fmt.Printf("\nMods %s \n",searchHitsOne.Modification_info["modified_peptide"])
+//                fmt.Printf("\nMods %s \n",modificationInfo)
+                if err != nil {
+                    log.Error("Failed in parsing Modification ", err)
+                    continue
+                }
+
         if (len(searchHitsOne.Peptide)>0) {
                 cnt = cnt + 1
                 cntS := strconv.Itoa(cnt)
@@ -164,7 +181,9 @@ func indexELSData(
                     "\", \"massdiff_hit_" + cntS + "\": \"" + searchHitsOne.Massdiff +
                     "\", \"num_tol_term_hit_" + cntS + "\": \"" + searchHitsOne.Num_tol_term +
                     "\", \"num_missed_cleavages_hit_" + cntS + "\": \"" + searchHitsOne.Num_missed_cleavages +
-                    "\", \"num_matched_peptides_hit_" + cntS + "\": \"" + searchHitsOne.Num_matched_peptides + "\""
+                    "\", \"num_matched_peptides_hit_" + cntS + "\": \"" + searchHitsOne.Num_matched_peptides + "\""  //+
+                  // "\", \"modification_info_hit_" + cntS + "\": \"" + searchHitsOne.Modification_info["modified_peptide"].(string) + "\""
+            
                 var searchScores []SearchScore
                 err := mapstructure.Decode(searchHitsOne.Search_score, &searchScores)
                 if err != nil {
@@ -188,6 +207,12 @@ func indexELSData(
                         jsonData = jsonData + ", \"expect_hit_" + cntS + "\":\"" + score.Value + "\""
                     }
                 }
+
+                //for _, mods := range modificationInfo {
+                        //jsonData = jsonData + ", \"mod_hit_" + cntS + "\":\"" + mods.Peptide + "\""
+                //}
+/* 
+*/
         }
 		// We have multiple hits, so add them as array with a counter
 		for _, hit := range searchHits {
@@ -204,8 +229,10 @@ func indexELSData(
 				"\", \"massdiff_hit_" + cntS + "\": \"" + hit.Massdiff +
 				"\", \"num_tol_term_hit_" + cntS + "\": \"" + hit.Num_tol_term +
 				"\", \"num_missed_cleavages_hit_" + cntS + "\": \"" + hit.Num_missed_cleavages +
-				"\", \"num_matched_peptides_hit_" + cntS + "\": \"" + hit.Num_matched_peptides + "\""
-			var searchScores []SearchScore
+				"\", \"num_matched_peptides_hit_" + cntS + "\": \"" + hit.Num_matched_peptides + "\"" +
+                    "\", \"modification_info_hit_" + cntS + "\": \"" + hit.Modification_info["modified_peptide"].(string) + "\""
+
+            var searchScores []SearchScore
 			err := mapstructure.Decode(hit.Search_score, &searchScores)
 			if err != nil {
 				log.Error("Failed in parsing Search Scores ", err)
