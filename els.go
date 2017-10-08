@@ -229,14 +229,11 @@ func indexELSData(
 				"\", \"massdiff_hit_" + cntS + "\": \"" + hit.Massdiff +
 				"\", \"num_tol_term_hit_" + cntS + "\": \"" + hit.Num_tol_term +
 				"\", \"num_missed_cleavages_hit_" + cntS + "\": \"" + hit.Num_missed_cleavages +
-<<<<<<< HEAD
 				"\", \"num_matched_peptides_hit_" + cntS + "\": \"" + hit.Num_matched_peptides + "\"" 
             //+
             //        "\", \"modification_info_hit_" + cntS + "\": \"" + hit.Modification_info["modified_peptide"].(string) + "\""
-=======
-				"\", \"num_matched_peptides_hit_" + cntS + "\": \"" + hit.Num_matched_peptides + "\"" +
-                    "\", \"modification_info_hit_" + cntS + "\": \"" + hit.Modification_info["modified_peptide"].(string) + "\""
->>>>>>> 26cce9452f3caf5f76375d217f81fb016fca4055
+//				"\", \"num_matched_peptides_hit_" + cntS + "\": \"" + hit.Num_matched_peptides + "\"" +
+//                    "\", \"modification_info_hit_" + cntS + "\": \"" + hit.Modification_info["modified_peptide"].(string) + "\""
 
             var searchScores []SearchScore
 			err := mapstructure.Decode(hit.Search_score, &searchScores)
