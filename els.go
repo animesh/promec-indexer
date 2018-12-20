@@ -82,7 +82,7 @@ func indexELSData(
 
 	// Check is the index exist, then we have template already. Otherwise insert template
 	resp, _, _ := request.Get(host + "/" + index).End()
-	if resp.StatusCode == 404 {
+	if resp.StatusCode == 400 {
 		resp, _, errs := request.Put(host + "/" + index).
 			Send(template).
 			End()
