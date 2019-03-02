@@ -1,0 +1,8 @@
+filebeat.inputs:
+- type: log
+  enabled: true
+  paths:
+    - /home/animeshs/gopath/src/github.com/promec-indexer/output.json
+output.elasticsearch:
+  hosts: ["localhost:9200"]
+  index: "filebeat"

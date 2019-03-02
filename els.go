@@ -8,15 +8,14 @@ import (
 	"strconv"
 	"time"
 	"reflect"
-
+	"strings"
 	log "github.com/Sirupsen/logrus"
 	"github.com/mitchellh/mapstructure"
 	"github.com/parnurzeal/gorequest"
-	"gopkg.in/olivere/elastic.v5"
+	"github.com/olivere/elastic"
+	"os"
 )
-
 type ModificationInfo struct  {
-	//Mods_result          map[string]interface{} `json:"mod_aminoacid_mass"`
 	Peptide  string `json:"modified_peptide"`
 	P_mass string `json:"value1"`
 	P_substitution string `json:"value2"`
@@ -78,15 +77,15 @@ func indexELSData(
 	request := gorequest.New()
 	// Create a context
 	ctx := context.Background()
-	bulkService := elastic.NewBulkService(client)
-
+	bulkService := client.Bulk().Index(index).Type(dataType)
 	// Check is the index exist, then we have template already. Otherwise insert template
 	resp, _, _ := request.Get(host + "/" + index).End()
+	info, code, err := client.Ping("http://127.0.0.1:9200").Do(ctx)
+	fmt.Printf("Response: %+v %+v %+v",info, code, err)
 	if resp.StatusCode == 400 {
 		resp, _, errs := request.Put(host + "/" + index).
 			Send(template).
 			End()
-
 		if errs != nil || resp.StatusCode < 200 || resp.StatusCode > 201 {
 			errorString := fmt.Sprintf("Could not insert template, Response: %d. Errors: %+v", resp.StatusCode, errs)
 			return errors.New(errorString)
@@ -95,14 +94,14 @@ func indexELSData(
 
 	log.Info("Indexing " + pepFileName + " to elasticserch: " + host + " index: " + index)
 
-    
+	f, err := os.OpenFile("output.json", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+  defer f.Close()
 	for _, specData := range xmlMap {
 		var specQuery SpectrumQuery
 		var searchHits []SearchHit
 		var searchHitsOne SearchHit
         var modificationInfo ModificationInfo
             err := mapstructure.Decode(specData, &specQuery)
-            //fmt.Printf("%s\n", specData)
             if err != nil {
                 log.Warn("Failed in parsing SpectrumQuery ", err)
                 log.Warn("Query-ERROR %+v ", specData)
@@ -111,20 +110,15 @@ func indexELSData(
             specQueryDataType := reflect.TypeOf(specQuery.Search_result["search_hit"])
             switch specQueryDataType.Kind() {
             case reflect.Slice:
-                fmt.Println(specQuery.Search_result["search_hit"], "\n tXXslice", specQueryDataType.Elem())
                 err = mapstructure.Decode(specQuery.Search_result["search_hit"], &searchHits)
             case reflect.Map:
-                //slice1 := make(map[int]interface{},1)
-                //searchHits:=specQuery.Search_result["search_hit"]
-                fmt.Println(specQuery.Search_result["search_hit"], "\n tXXmap", specQueryDataType.Elem())
                 err = mapstructure.Decode(specQuery.Search_result["search_hit"], &searchHitsOne)
             case reflect.Array:
-                fmt.Println(specQuery.Search_result["search_hit"], "\n tXarray", specQueryDataType.Elem())
+                //fmt.Println(specQuery.Search_result["search_hit"], "\n tXarray", specQueryDataType.Elem())
             default:
-                fmt.Println(specQuery.Search_result["search_hit"], "\n tXelse", specQueryDataType.Elem())
+                //fmt.Println(specQuery.Search_result["search_hit"], "\n tXelse", specQueryDataType.Elem())
             }
                 if err != nil {
-                    log.Warn(" Failed in parsing Search Result for Index ", specQuery.Index,"Mass", specQuery.Precursor_neutral_mass,"Err ",err)
                     log.Warn("HIT-ERROR %T ", specQuery.Search_result["search_hit"])
                     continue
                 }
@@ -138,11 +132,12 @@ func indexELSData(
                     log.Warn("Failed in parsing time ", err)
                     continue
                 }
-  
+
 		// Add current spectrum query data to elasticserch data in bulk format
 		id := fmt.Sprintf("%x", sha1.Sum([]byte(specQuery.Spectrum+pepFileName)))
 		// Add 000 to make time in milliseconds
 		jsonData := "{\"@timestamp\":\"" + strconv.FormatInt(specQuery.DateTime.Unix(), 10) + "000" +
+			"\", \"_id\": \"" + id +
 			"\", \"database\": \"" + specQuery.DbName +
 			"\", \"search_engine\": \"" + specQuery.SearchEng +
 			"\", \"file\": \"" + specQuery.File +
@@ -160,8 +155,6 @@ func indexELSData(
 		cnt := 0
 		// single hit case
                     err = mapstructure.Decode(searchHitsOne.Modification_info, &modificationInfo)
-                fmt.Printf("\nMods %s \n",searchHitsOne.Modification_info["modified_peptide"])
-//                fmt.Printf("\nMods %s \n",modificationInfo)
                 if err != nil {
                     log.Error("Failed in parsing Modification ", err)
                     continue
@@ -183,7 +176,7 @@ func indexELSData(
                     "\", \"num_missed_cleavages_hit_" + cntS + "\": \"" + searchHitsOne.Num_missed_cleavages +
                     "\", \"num_matched_peptides_hit_" + cntS + "\": \"" + searchHitsOne.Num_matched_peptides + "\""  //+
                   // "\", \"modification_info_hit_" + cntS + "\": \"" + searchHitsOne.Modification_info["modified_peptide"].(string) + "\""
-            
+
                 var searchScores []SearchScore
                 err := mapstructure.Decode(searchHitsOne.Search_score, &searchScores)
                 if err != nil {
@@ -208,11 +201,6 @@ func indexELSData(
                     }
                 }
 
-                //for _, mods := range modificationInfo {
-                        //jsonData = jsonData + ", \"mod_hit_" + cntS + "\":\"" + mods.Peptide + "\""
-                //}
-/* 
-*/
         }
 		// We have multiple hits, so add them as array with a counter
 		for _, hit := range searchHits {
@@ -229,7 +217,7 @@ func indexELSData(
 				"\", \"massdiff_hit_" + cntS + "\": \"" + hit.Massdiff +
 				"\", \"num_tol_term_hit_" + cntS + "\": \"" + hit.Num_tol_term +
 				"\", \"num_missed_cleavages_hit_" + cntS + "\": \"" + hit.Num_missed_cleavages +
-				"\", \"num_matched_peptides_hit_" + cntS + "\": \"" + hit.Num_matched_peptides + "\"" 
+				"\", \"num_matched_peptides_hit_" + cntS + "\": \"" + hit.Num_matched_peptides + "\""
             //+
             //        "\", \"modification_info_hit_" + cntS + "\": \"" + hit.Modification_info["modified_peptide"].(string) + "\""
 //				"\", \"num_matched_peptides_hit_" + cntS + "\": \"" + hit.Num_matched_peptides + "\"" +
@@ -261,19 +249,28 @@ func indexELSData(
 		}
 
 		jsonData = jsonData + "}"
-        fmt.Printf("%s\n", jsonData)
-		bulkService.Add(elastic.NewBulkIndexRequest().Index(index).Type(dataType).Id(id).Doc(jsonData))
+		jsonData = strings.Replace(jsonData,"\t"," ",-1)
+
+        //fmt.Printf("%s\n", jsonData)
+		//f.Write([]byte(jsonData+"\n"))
+		bulkService.Add(elastic.NewBulkIndexRequest().Id(id).Doc(jsonData))
+		fmt.Printf("%+v",bulkService.NumberOfActions())
 		if bulkService.NumberOfActions() >= bulkSize {
-			_, err := bulkService.Do(ctx)
+			bulkResponse, err := bulkService.Do(ctx)
+			indexed := bulkResponse.Indexed()
+			fmt.Printf("%+v,",indexed[0])
 			if err != nil {
 				log.Error("Failed in doing bulk request ", err)
 			}
 		}
 	}
 	// ingest the rest of the data
-	_, err := bulkService.Do(ctx)
-	if err != nil {
-		log.Error("Failed in doing bulk request ", err)
+	if bulkService.NumberOfActions() > 0 {
+		bulkResponse, err := bulkService.Do(ctx)
+		fmt.Printf("Last%+v,",bulkResponse.Failed())
+		if err != nil {
+			log.Error("Failed in doing bulk request ", err)
+		}
 	}
 	return nil
 }

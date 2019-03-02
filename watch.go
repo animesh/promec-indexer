@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	elastic "gopkg.in/olivere/elastic.v5"
+	elastic 	"github.com/olivere/elastic"
 
 	log "github.com/Sirupsen/logrus"
 )

@@ -8,7 +8,7 @@ import (
 
 	log "github.com/Sirupsen/logrus"
 	colorable "github.com/mattn/go-colorable"
-	elastic "gopkg.in/olivere/elastic.v5"
+	elastic 	"github.com/olivere/elastic"
 )
 
 const srcExtension = "pep.xml"
